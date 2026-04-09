@@ -56,7 +56,24 @@ def main():
                 )
                 raw_response = completion.choices[0].message.content.strip()
                 
-                # Clean up markdown formatting if the LLM adds it
-                if raw_response.startswith("
-http://googleusercontent.com/immersive_entry_chip/0
-http://googleusercontent.com/immersive_entry_chip/1
+                # Clean up markdown formatting safely
+                raw_response = raw_response.replace("```json", "").replace("```", "").strip()
+                
+                action_payload = json.loads(raw_response)
+            except Exception as e:
+                print(f"LLM decision failed, falling back to NO_OP: {e}")
+
+        # Send the action to your environment
+        try:
+            step_resp = client.post(f"{API_BASE_URL}/step", json=action_payload)
+            step_resp.raise_for_status()
+            state = step_resp.json()
+            done = state.get("done", False)
+        except Exception as e:
+            print(f"[ERROR] Action step failed: {e}")
+            break
+
+    print("[END] Episode finished")
+
+if __name__ == "__main__":
+    main()
