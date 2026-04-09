@@ -7,7 +7,7 @@ LLM_BASE_URL = os.environ["API_BASE_URL"]
 LLM_API_KEY = os.environ["API_KEY"]
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-3.5-turbo")
 
-ENV_BASE_URL = "http://localhost:8000"
+ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 
 def main():
     print("[START] Initializing SRE Agent")
