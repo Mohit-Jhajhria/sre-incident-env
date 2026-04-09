@@ -8,27 +8,38 @@ LLM_BASE_URL = os.environ["API_BASE_URL"]
 LLM_API_KEY = os.environ["API_KEY"]
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-3.5-turbo")
 
-ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "http://environment:8000").rstrip("/")
+CANDIDATE_URLS = [
+    os.environ.get("ENV_BASE_URL"),
+    "http://environment:8000",
+    "http://env:8000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://host.docker.internal:8000"
+]
+
+CANDIDATE_URLS = [u.rstrip("/") for u in CANDIDATE_URLS if u]
+
+def connect(client):
+    for base in CANDIDATE_URLS:
+        for _ in range(5):
+            try:
+                resp = client.post(f"{base}/reset", json={})
+                resp.raise_for_status()
+                return base, resp.json()
+            except:
+                time.sleep(2)
+    return None, None
 
 def main():
     print("[START] Initializing SRE Agent")
     
     client = httpx.Client(timeout=60.0)
-    state = None
+    base_url, state = connect(client)
     
-    for attempt in range(20):
-        try:
-            print(f"[CONNECT] Attempt {attempt+1}")
-            reset_resp = client.post(f"{ENV_BASE_URL}/reset", json={})
-            reset_resp.raise_for_status()
-            state = reset_resp.json()
-            break
-        except Exception as e:
-            print(f"[WARN] {e}")
-            time.sleep(2)
-            
     if not state:
         raise RuntimeError("Could not connect to the environment server.")
+    
+    print(f"[CONNECTED] {base_url}")
     
     llm_client = OpenAI(
         base_url=LLM_BASE_URL,
@@ -62,7 +73,7 @@ def main():
         except:
             action_payload = {"action_type": "NO_OP", "params": {}}
 
-        step_resp = client.post(f"{ENV_BASE_URL}/step", json=action_payload)
+        step_resp = client.post(f"{base_url}/step", json=action_payload)
         step_resp.raise_for_status()
         state = step_resp.json()
         done = state.get("done", False)
