@@ -1,4 +1,5 @@
 import os
+import time
 import httpx
 import json
 from openai import OpenAI
@@ -13,10 +14,19 @@ def main():
     print("[START] Initializing SRE Agent")
     
     client = httpx.Client(timeout=30.0)
-
-    reset_resp = client.post(f"{ENV_BASE_URL}/reset", json={})
-    reset_resp.raise_for_status()
-    state = reset_resp.json()
+    state = None
+    
+    for attempt in range(15):
+        try:
+            reset_resp = client.post(f"{ENV_BASE_URL}/reset", json={})
+            reset_resp.raise_for_status()
+            state = reset_resp.json()
+            break
+        except Exception:
+            time.sleep(2)
+            
+    if not state:
+        raise RuntimeError("Could not connect to the environment server after 30 seconds.")
     
     llm_client = OpenAI(
         base_url=LLM_BASE_URL,
