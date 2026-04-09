@@ -8,25 +8,27 @@ LLM_BASE_URL = os.environ["API_BASE_URL"]
 LLM_API_KEY = os.environ["API_KEY"]
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-3.5-turbo")
 
-ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+ENV_BASE_URL = os.environ["ENV_BASE_URL"].rstrip("/")
 
 def main():
     print("[START] Initializing SRE Agent")
     
-    client = httpx.Client(timeout=30.0)
+    client = httpx.Client(timeout=60.0)
     state = None
     
-    for attempt in range(15):
+    for attempt in range(20):
         try:
+            print(f"[CONNECT] Attempt {attempt+1}")
             reset_resp = client.post(f"{ENV_BASE_URL}/reset", json={})
             reset_resp.raise_for_status()
             state = reset_resp.json()
             break
-        except Exception:
+        except Exception as e:
+            print(f"[WARN] {e}")
             time.sleep(2)
             
     if not state:
-        raise RuntimeError("Could not connect to the environment server after 30 seconds.")
+        raise RuntimeError("Could not connect to the environment server.")
     
     llm_client = OpenAI(
         base_url=LLM_BASE_URL,
