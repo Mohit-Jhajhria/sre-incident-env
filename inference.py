@@ -3,18 +3,19 @@ import httpx
 import json
 from openai import OpenAI
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY", "dummy_key")
+LLM_BASE_URL = os.getenv("API_BASE_URL")
+LLM_API_KEY = os.getenv("API_KEY") or os.getenv("HF_TOKEN", "dummy_key")
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-3.5-turbo")
+
+ENV_BASE_URL = "http://localhost:8000"
 
 def main():
     print("[START] Initializing SRE Agent")
     
-    # Connect to your FastAPI environment
     client = httpx.Client(timeout=30.0)
 
     try:
-        reset_resp = client.post(f"{API_BASE_URL}/reset", json={})
+        reset_resp = client.post(f"{ENV_BASE_URL}/reset", json={})
         reset_resp.raise_for_status()
         state = reset_resp.json()
         print(f"Environment reset successful. Task ID: {state.get('task_id')}")
@@ -25,20 +26,20 @@ def main():
     done = False
     step = 0
 
-    # Initialize LLM
     try:
-        llm_client = OpenAI(api_key=API_KEY)
+        llm_client = OpenAI(
+            base_url=LLM_BASE_URL,
+            api_key=LLM_API_KEY
+        )
         use_llm = True
     except Exception as e:
         print(f"LLM initialization skipped: {e}")
         use_llm = False
 
-    # Run the episode
     while not done and step < 15:
         step += 1
         print(f"[STEP] Running step {step}")
 
-        # Default fallback action
         action_payload = {"action_type": "NO_OP", "params": {}}
 
         if use_llm:
@@ -56,16 +57,15 @@ def main():
                 )
                 raw_response = completion.choices[0].message.content.strip()
                 
-                # Clean up markdown formatting safely
+              
                 raw_response = raw_response.replace("```json", "").replace("```", "").strip()
                 
                 action_payload = json.loads(raw_response)
             except Exception as e:
                 print(f"LLM decision failed, falling back to NO_OP: {e}")
 
-        # Send the action to your environment
         try:
-            step_resp = client.post(f"{API_BASE_URL}/step", json=action_payload)
+            step_resp = client.post(f"{ENV_BASE_URL}/step", json=action_payload)
             step_resp.raise_for_status()
             state = step_resp.json()
             done = state.get("done", False)
