@@ -1,0 +1,221 @@
+name: ProductionIncidentEnv
+version: "1.0.0"
+description: >
+  An OpenEnv-compliant reinforcement learning environment for production SRE
+  incident response. Agents act as on-call engineers managing a simulated
+  8-service microservices topology. A hidden fault has been injected into the
+  system; the agent must diagnose the root cause and apply targeted remediations
+  to restore SLO compliance before the incident cascades into a full outage.
+
+domain: site-reliability-engineering
+difficulty_range: [easy, medium, hard]
+episode_types: [single-fault, compound-fault]
+
+environment:
+  max_steps: 300
+  services: 8
+  fault_classes: 6
+  resolution_threshold: 3  # consecutive healthy steps required to declare success
+
+observation_space:
+  type: structured-dict
+  components:
+    services:
+      description: Per-service runtime metrics (noisy observations)
+      fields:
+        - error_rate: float  # fraction [0,1], σ=0.005
+        - latency_p50: float  # ms, σ=2
+        - latency_p99: float  # ms, σ=10
+        - cpu_utilization: float  # [0,1], σ=0.02
+        - memory_utilization: float  # [0,1], σ=0.02
+        - request_rate: float  # rps, σ=5
+        - pod_count: int  # exact
+        - circuit_breaker_open: bool  # exact
+        - rate_limit_multiplier: float  # exact
+        - active_version: int  # exact
+        - is_slo_violated: bool  # derived
+        - slo_error_rate: float  # SLO threshold for this service
+        - slo_latency_p99: float  # SLO threshold for this service
+    alerts:
+      description: Active (unresolved) alerts sorted by recency
+      fields:
+        - id: str
+        - service_id: str
+        - metric: str
+        - severity: str  # P1 | P2 | P3
+        - current_val: float
+        - age_steps: int
+        - acknowledged: bool
+    infra:
+      description: Cluster-level infrastructure metrics
+      fields:
+        - cluster_capacity_used_pct: float
+        - db_conn_pool_used_pct: float
+    change_log:
+      description: Last 5 agent actions with outcomes
+      fields:
+        - step: int
+        - action_type: str
+        - action_params: dict
+        - outcome: str  # applied | no_effect | worsened | invalid
+        - health_delta: float
+    scalar_fields:
+      - step: int
+      - time_remaining: int
+      - blast_radius_budget: float  # [0,1]; risky actions deplete it
+      - query_result: dict | null  # populated after QUERY_LOGS or QUERY_METRICS
+
+action_space:
+  type: parameterized-discrete
+  approximate_cardinality: 85
+  actions:
+    SCALE_SERVICE:
+      params: {service_id: str, delta: "int in {-3,-2,-1,1,2,3}"}
+      cost: low
+    ROLLBACK_SERVICE:
+      params: {service_id: str, steps_back: "int in {1,2,3}"}
+      cost: medium
+      blast_budget_cost: 0.15
+    RESTART_SERVICE:
+      params: {service_id: str}
+      cost: high
+      blast_budget_cost: 0.20
+    OPEN_CIRCUIT_BREAKER:
+      params: {service_id: str}
+      cost: medium
+      blast_budget_cost: 0.05
+    CLOSE_CIRCUIT_BREAKER:
+      params: {service_id: str}
+      cost: low
+    ADJUST_RATE_LIMIT:
+      params: {service_id: str, multiplier: "float in {0.25,0.5,0.75,1.0,1.5,2.0}"}
+      cost: low-medium
+      blast_budget_cost: 0.10  # only for multiplier <= 0.5
+    REROUTE_TRAFFIC:
+      params: {from_service: str, to_service: str, percentage: "int in {25,50,75,100}"}
+      cost: high
+      blast_budget_cost: 0.10-0.25
+    QUERY_LOGS:
+      params: {service_id: str, window_minutes: "int in {5,15,30}"}
+      cost: zero  # diagnostic only
+    QUERY_METRICS:
+      params: {service_id: str, metric: str}
+      cost: zero  # diagnostic only
+    ACKNOWLEDGE_ALERT:
+      params: {alert_id: str}
+      cost: zero
+    PAGE_HUMAN:
+      params: {severity: "str in {P1,P2}"}
+      terminates_episode: true
+    NO_OP:
+      params: {}
+      cost: zero
+
+reward:
+  type: dense-shaped
+  components:
+    slo_health:
+      description: Per-step average health score across all services
+      range: [0.0, 2.0]
+      weight: 2.0
+    resolution_bonus:
+      description: Awarded on successful resolution; scales with speed
+      range: [50.0, 75.0]
+      condition: consecutive_healthy_steps >= 3
+    invalid_action:
+      description: Penalty for structurally invalid actions
+      value: -2.0
+    redundant_action:
+      description: Penalty for repeating ineffective actions
+      value: -1.5
+    worsening:
+      description: Proportional penalty when agent action degrades system health
+      range: [-∞, 0.0]
+      formula: -3.0 * health_drop (when drop > 0.05)
+    blast_radius:
+      description: Progressive per-step penalty when budget < 0.3
+      formula: -5.0 * (1.0 - blast_radius_budget) per step
+    escalation:
+      description: Partial credit for correct escalation; penalizes premature paging
+      range: [-10.0, 20.0]
+    diagnostic_novelty:
+      description: Small one-time reward per novel service/metric query
+      value: 0.3
+  typical_episode_range: [-200, +100]
+  good_agent_range: [+60, +85]
+
+tasks:
+  - id: task_easy_bad_deploy
+    name: Isolated Bad Deployment
+    difficulty: easy
+    fault: BAD_DEPLOY
+    origin: cart-service
+    seed: 42
+    max_steps: 60
+    expected_resolution_steps: 10
+    grader_weights:
+      resolution_achieved: 0.40
+      correct_target: 0.30
+      speed_bonus: 0.20
+      blast_budget_bonus: 0.10
+
+  - id: task_medium_traffic_surge
+    name: Traffic Surge Cascade
+    difficulty: medium
+    fault: TRAFFIC_SURGE
+    origin: api-gateway
+    seed: 137
+    max_steps: 100
+    expected_resolution_steps: 25
+    grader_weights:
+      resolution_achieved: 0.35
+      correct_origin_action: 0.25
+      surgical_focus: 0.15
+      speed_bonus: 0.15
+      blast_budget_bonus: 0.10
+
+  - id: task_hard_db_cascade
+    name: DB Connection Exhaustion with Memory Cascade
+    difficulty: hard
+    fault: DB_CONN_EXHAUSTION + induced MEMORY_LEAK (compound)
+    origin: db-proxy
+    seed: 314
+    max_steps: 150
+    expected_resolution_steps: 50
+    grader_weights:
+      resolution_achieved: 0.30
+      db_addressed_first: 0.20
+      correct_restart_timing: 0.15
+      diagnostic_quality: 0.15
+      speed_bonus: 0.10
+      blast_budget_bonus: 0.10
+
+fault_types:
+  - MEMORY_LEAK
+  - BAD_DEPLOY
+  - TRAFFIC_SURGE
+  - DB_CONN_EXHAUSTION
+  - DEPENDENCY_LATENCY
+  - NETWORK_PARTITION
+
+api:
+  framework: FastAPI
+  host: 0.0.0.0
+  port: 7860
+  endpoints:
+    - POST /reset
+    - POST /step
+    - GET  /state
+    - GET  /tasks
+    - POST /grader
+    - POST /baseline
+    - GET  /health
+
+compliance:
+  openenv_version: "1.0"
+  observation_model: pydantic
+  action_model: pydantic
+  reward_model: pydantic
+  step_signature: "step(action) -> (observation, reward, done, info)"
+  reset_signature: "reset() -> observation"
+  state_signature: "state() -> dict"
