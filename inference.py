@@ -8,7 +8,7 @@ LLM_BASE_URL = os.environ["API_BASE_URL"]
 LLM_API_KEY = os.environ["API_KEY"]
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-3.5-turbo")
 
-ENV_BASE_URL = os.environ["ENV_BASE_URL"].rstrip("/")
+ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "http://environment:8000").rstrip("/")
 
 def main():
     print("[START] Initializing SRE Agent")
@@ -53,13 +53,13 @@ def main():
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1
         )
+
         raw_response = completion.choices[0].message.content.strip()
-        
         raw_response = raw_response.replace("```json", "").replace("```", "").strip()
         
         try:
             action_payload = json.loads(raw_response)
-        except json.JSONDecodeError:
+        except:
             action_payload = {"action_type": "NO_OP", "params": {}}
 
         step_resp = client.post(f"{ENV_BASE_URL}/step", json=action_payload)
